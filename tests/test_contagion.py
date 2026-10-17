@@ -1,13 +1,17 @@
 """Every test checks against a known answer. Run: python -m pytest  (or python tests/test_contagion.py)"""
+import io
 import os
 import sys
+import zipfile
 
 import numpy as np
+import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from contagion.core import (cholesky_fevd, connectedness, gfevd, ma_coefs, rolling_total, select_lag,
                             simulate_var, spillover, var_fit)
-from contagion.data import load_bundled, returns, weekly_log_vol
+from contagion.data import (load_bundled, parse_cbr, parse_kase_xlsx, parse_nbk, returns, to_trade_date,
+                            weekly_log_vol)
 
 
 def test_gfevd_closed_form_no_dynamics():
@@ -89,6 +93,50 @@ def test_real_oil_and_commodity_currencies():
     ends, tot, _ = rolling_total(W.values, window=104, p=1)
     year = W.index[ends].year
     assert tot[(year >= 2009) & (year <= 2012)].mean() > tot[(year >= 2003) & (year <= 2006)].mean() + 15
+
+
+def test_official_source_parsers_and_trade_dates():
+    """Snippets in each source's format (no network). Rates per unit; official stamps move to the trading day."""
+    nbk = parse_nbk('<tr>\n\t<td class="text-center" style="width: 120px;">2015-08-21</td>\n\t\t'
+                    '<td class="text-center">1</td>\n<td class="text-center">255.26</td></tr>')
+    assert nbk.to_dict() == {pd.Timestamp("2015-08-21"): 255.26}
+    cbr = parse_cbr('<?xml version="1.0" encoding="windows-1251"?><ValCurs ID="R01235">'
+                    '<Record Date="25.02.2022" Id="R01235"><Nominal>10</Nominal><Value>869,288</Value></Record>'
+                    '</ValCurs>'.encode("cp1251"))
+    assert np.isclose(cbr[pd.Timestamp("2022-02-25")], 86.9288)
+    sheet = ('<worksheet><sheetData><row r="2"><c r="A2" t="inlineStr"><is><t>Дата</t></is></c></row>'
+             '<row r="3"><c r="A3" t="inlineStr"><is><t>16.10.26</t></is></c><c r="B3" t="inlineStr"><is>'
+             '<t>7830.68</t></is></c><c r="E3" t="inlineStr"><is><t>7862.65</t></is></c></row></sheetData></worksheet>')
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as z:
+        z.writestr("xl/worksheets/sheet1.xml", sheet)
+    assert parse_kase_xlsx(buf.getvalue()).to_dict() == {pd.Timestamp("2026-10-16"): 7862.65}
+    stamps = pd.Series([1.0, 2.0, 3.0, 4.0], pd.to_datetime(["2022-02-25", "2022-02-26", "2022-02-27", "2022-02-28"]))
+    moved = to_trade_date(stamps)                    # Fri, Sat stamps -> Thu, Fri; Sun, Mon repeat Sat: dropped
+    assert moved.to_dict() == {pd.Timestamp("2022-02-24"): 1.0, pd.Timestamp("2022-02-25"): 2.0}
+
+
+def test_cli_start_focus_and_logvol():
+    """CLI on a synthetic price CSV: --start trims the sample; --focus shares of the market's variance sum to 100%."""
+    import contextlib, re, tempfile
+    from contagion.__main__ import main
+    r = simulate_var([np.array([[0.1, 0.0, 0.0], [0.0, 0.1, 0.0], [0.3, 0.3, 0.1]])], np.eye(3), 2000, seed=6)
+    P = pd.DataFrame(np.exp(np.cumsum(r * 0.01, axis=0)), pd.bdate_range("2012-01-02", periods=2000),
+                     ["OIL", "RUB", "KZT"])
+    argv = sys.argv
+    with tempfile.TemporaryDirectory() as d:
+        P.to_csv(os.path.join(d, "p.csv"))
+        for measure in ("returns", "logvol"):
+            sys.argv = ["contagion", "--csv", os.path.join(d, "p.csv"), "--start", "2015-01-01", "--focus", "KZT",
+                        "--measure", measure, "--window", "52", "--out", os.path.join(d, "c.png")]
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                main()
+            text = out.getvalue()
+            assert text.startswith("\n2015-01-") and os.path.exists(os.path.join(d, "c.png"))
+            shares = [float(x) for x in re.findall(r"^  \w+\s+([\d.]+)%", text, re.M)]
+            assert len(shares) == 3 and abs(sum(shares) - 100) < 0.2
+    sys.argv = argv
 
 
 if __name__ == "__main__":

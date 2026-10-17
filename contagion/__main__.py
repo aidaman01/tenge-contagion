@@ -1,7 +1,9 @@
-"""python -m contagion [--csv prices.csv] [--window 104] [--out contagion.png]
+"""python -m contagion [--csv prices.csv] [--start DATE] [--measure returns|logvol] [--focus NAME]
+                     [--window 104] [--out contagion.png]
 
 Without --csv: bundled public-domain demo (Brent + oil and EM currencies, 2000-2026).
-With --csv: a wide CSV of daily prices (first column dates, one column per market)."""
+With --csv: a wide CSV of daily prices (first column dates, one column per market).
+--focus: also print where that market's forecast variance comes from, and its pairwise net links."""
 import argparse
 
 import matplotlib
@@ -12,7 +14,7 @@ import pandas as pd
 from matplotlib.patches import FancyArrowPatch
 
 from .core import rolling_total, spillover
-from .data import load_bundled, returns
+from .data import load_bundled, returns, weekly_log_vol
 
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
 SEND, RECV, BLUE = "#eb6834", "#2a78d6", "#2a78d6"
@@ -25,6 +27,24 @@ def report(c, label):
     print(f"{'market':16}{'from others':>13}{'to others':>11}{'net':>8}")
     for i, n in enumerate(c["names"]):
         print(f"{n:16}{c['from_'][i]:>12.1f}%{c['to'][i]:>10.1f}%{c['net'][i]:>+8.1f}")
+
+
+def report_focus(c, name):
+    i = c["names"].index(name)
+    print(f"\nwhere {name}'s forecast variance comes from, and pairwise net (+ = market transmits to {name}):")
+    for j, n in enumerate(c["names"]):
+        print(f"  {n:14}{c['theta'][i, j] * 100:>6.1f}%" + ("   (own)" if i == j else f"{c['pairwise'][j, i]:>+8.1f}"))
+
+
+def report_events(t, tot, weeks=26):
+    """Rolling total in the last window ending before each event, and its peak in the following weeks."""
+    for d, lab in EVENTS.items():
+        d = pd.Timestamp(d)
+        if t[0] < d <= t[-1]:
+            before = tot[t < d][-1]
+            after = (t >= d) & (t < d + pd.Timedelta(weeks=weeks))
+            k = np.flatnonzero(after)[tot[after].argmax()]
+            print(f"  {lab:18} before {before:5.1f}%  peak within {weeks} weeks {tot[k]:5.1f}% ({t[k].date()})")
 
 
 def draw_network(ax, c, min_link=1.0):
@@ -55,6 +75,10 @@ def main():
     ap = argparse.ArgumentParser(description="Diebold-Yilmaz contagion between markets.")
     ap.add_argument("--csv", help="wide CSV of daily prices: date column + one column per market")
     ap.add_argument("--freq", default="W-FRI", help="return frequency: W-FRI (default) or D")
+    ap.add_argument("--start", help="first date to use, e.g. 2015-08-20")
+    ap.add_argument("--measure", default="returns", choices=["returns", "logvol"],
+                    help="returns (default) or weekly log volatility")
+    ap.add_argument("--focus", help="market to break down, e.g. KZT")
     ap.add_argument("--window", type=int, default=104, help="rolling window in periods (104 weeks = 2 years)")
     ap.add_argument("--out", default="contagion.png")
     a = ap.parse_args()
@@ -65,12 +89,18 @@ def main():
     else:
         P = load_bundled()
         title = "Contagion between oil and commodity currencies (EIA, Federal Reserve H.10)"
-    Y = returns(P, a.freq)
+    if a.start:
+        P = P[P.index >= a.start]
+    Y = returns(P, a.freq) if a.measure == "returns" else weekly_log_vol(P)
+    what = f"{a.freq} returns" if a.measure == "returns" else "weekly log volatilities"
     c = spillover(Y.values, names=list(Y.columns))
-    report(c, f"{Y.index[0].date()} to {Y.index[-1].date()}, {len(Y)} {a.freq} returns")
+    report(c, f"{Y.index[0].date()} to {Y.index[-1].date()}, {len(Y)} {what}")
+    if a.focus:
+        report_focus(c, a.focus)
     ends, tot, net = rolling_total(Y.values, window=a.window, p=c["lag"])
     t = Y.index[ends]
-    print(f"rolling total: min {tot.min():.1f}% ({t[tot.argmin()].date()}), max {tot.max():.1f}% ({t[tot.argmax()].date()})")
+    print(f"\nrolling total: min {tot.min():.1f}% ({t[tot.argmin()].date()}), max {tot.max():.1f}% ({t[tot.argmax()].date()})")
+    report_events(t, tot)
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": GRID, "axes.labelcolor": MUTED,
                          "xtick.color": MUTED, "ytick.color": MUTED, "text.color": INK})

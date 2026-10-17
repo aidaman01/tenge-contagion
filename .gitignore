@@ -3,3 +3,4 @@ __pycache__/
 .venv/
 .DS_Store
 contagion.png
+data/kz_prices.csv
