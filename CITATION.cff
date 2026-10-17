@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this work, please cite it as below."
+title: "Tenge Contagion: how shocks reach the Kazakh tenge (Diebold-Yilmaz connectedness)"
+authors:
+  - family-names: Bliyev
+    given-names: Aidan
+version: 1.0.0
+date-released: 2026-10-17
+license: MIT
+repository-code: "https://github.com/aidaman01/tenge-contagion"
+keywords:
+  - financial contagion
+  - Diebold-Yilmaz
+  - connectedness
+  - Kazakhstan
+  - tenge
+  - exchange rates

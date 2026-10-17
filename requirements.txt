@@ -1,6 +1,6 @@
-numpy>=1.24
-scipy>=1.10
-pandas>=2.0
-matplotlib>=3.7
-yfinance>=0.2.40
-requests>=2.31
+# Exact versions the published results were produced with (2026-10-17).
+numpy==2.5.4
+pandas==3.0.6
+matplotlib==3.11.2
+yfinance==1.7.0
+requests==2.34.2
