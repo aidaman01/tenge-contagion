@@ -1,5 +1,5 @@
 """python -m contagion [--csv prices.csv] [--start DATE] [--measure returns|logvol] [--focus NAME]
-                     [--window 104] [--out contagion.png]
+                     [--window 104] [--compare-window 52] [--title TEXT] [--out contagion.png]
 
 Without --csv: bundled public-domain demo (Brent + oil and EM currencies, 2000-2026).
 With --csv: a wide CSV of daily prices (first column dates, one column per market).
@@ -17,7 +17,7 @@ from .core import rolling_total, spillover
 from .data import load_bundled, returns, weekly_log_vol
 
 INK, MUTED, GRID = "#0b0b0b", "#52514e", "#e4e3df"
-SEND, RECV, BLUE = "#eb6834", "#2a78d6", "#2a78d6"
+SEND, RECV, BLUE, OWN = "#eb6834", "#2a78d6", "#2a78d6", "#b9b7b1"
 EVENTS = {"2008-09-15": "Lehman", "2014-11-28": "OPEC, oil crash", "2020-03-09": "COVID, oil war",
           "2022-02-24": "Russia sanctions"}
 
@@ -71,6 +71,24 @@ def draw_network(ax, c, min_link=1.0):
                  fontsize=10)
 
 
+def draw_shares(ax, c, name):
+    """Horizontal bars: share of the market's forecast variance coming from each source (its row of theta)."""
+    i = c["names"].index(name)
+    sh = c["theta"][i] * 100
+    order = np.argsort(sh)
+    ax.barh(range(len(order)), sh[order], height=0.62, color=[OWN if k == i else BLUE for k in order])
+    for y, k in enumerate(order):
+        ax.annotate(f"{sh[k]:.1f}%", (sh[k], y), xytext=(4, 0), textcoords="offset points", va="center",
+                    fontsize=9, color=INK)
+    ax.set_yticks(range(len(order)), [f"{name} itself" if k == i else c["names"][k] for k in order])
+    ax.tick_params(axis="y", length=0)
+    ax.set_xlim(0, sh.max() * 1.15)
+    ax.xaxis.set_visible(False)
+    ax.spines[["top", "right", "bottom"]].set_visible(False)
+    ax.set_title(f"Where {name}'s forecast variance comes from\n{100 - sh[i]:.0f}% imported, "
+                 f"{sh[i]:.0f}% its own", fontsize=10)
+
+
 def main():
     ap = argparse.ArgumentParser(description="Diebold-Yilmaz contagion between markets.")
     ap.add_argument("--csv", help="wide CSV of daily prices: date column + one column per market")
@@ -80,6 +98,8 @@ def main():
                     help="returns (default) or weekly log volatility")
     ap.add_argument("--focus", help="market to break down, e.g. KZT")
     ap.add_argument("--window", type=int, default=104, help="rolling window in periods (104 weeks = 2 years)")
+    ap.add_argument("--compare-window", type=int, help="also draw the rolling total for this window, e.g. 52")
+    ap.add_argument("--title", help="chart title")
     ap.add_argument("--out", default="contagion.png")
     a = ap.parse_args()
 
@@ -101,25 +121,42 @@ def main():
     t = Y.index[ends]
     print(f"\nrolling total: min {tot.min():.1f}% ({t[tot.argmin()].date()}), max {tot.max():.1f}% ({t[tot.argmax()].date()})")
     report_events(t, tot)
+    if a.compare_window:
+        e2, tot2, _ = rolling_total(Y.values, window=a.compare_window, p=c["lag"])
+        t2 = Y.index[e2]
+        print(f"\nrolling total, {a.compare_window}-period window: min {tot2.min():.1f}% ({t2[tot2.argmin()].date()}), "
+              f"max {tot2.max():.1f}% ({t2[tot2.argmax()].date()})")
+        report_events(t2, tot2)
 
     plt.rcParams.update({"font.size": 10, "axes.edgecolor": GRID, "axes.labelcolor": MUTED,
                          "xtick.color": MUTED, "ytick.color": MUTED, "text.color": INK})
-    fig = plt.figure(figsize=(13, 5.8))
-    ax1 = fig.add_axes([0.0, 0.0, 0.34, 0.80])
-    ax2 = fig.add_axes([0.42, 0.10, 0.56, 0.70])
+    if a.focus:                                       # network and variance shares on top, time below
+        fig = plt.figure(figsize=(13, 10.5))
+        ax1 = fig.add_axes([0.0, 0.47, 0.42, 0.42])
+        draw_shares(fig.add_axes([0.58, 0.55, 0.36, 0.29]), c, a.focus)
+        ax2 = fig.add_axes([0.06, 0.06, 0.90, 0.36])
+    else:
+        fig = plt.figure(figsize=(13, 5.8))
+        ax1 = fig.add_axes([0.0, 0.0, 0.34, 0.80])
+        ax2 = fig.add_axes([0.42, 0.10, 0.56, 0.70])
     draw_network(ax1, c)
-    ax2.plot(t, tot, color=BLUE, lw=1.6)
+    unit = "week" if a.freq.startswith("W") or a.measure == "logvol" else "day"
+    ax2.plot(t, tot, color=BLUE, lw=1.8, label=f"{a.window}-{unit} window")
+    if a.compare_window:
+        ax2.plot(t2, tot2, color=MUTED, lw=0.9, alpha=0.8, label=f"{a.compare_window}-{unit} window")
+        ax2.legend(frameon=False, loc="upper right", fontsize=9)
     for d, lab in EVENTS.items():
         d = pd.Timestamp(d)
         if t[0] <= d <= t[-1]:
             ax2.axvline(d, color=GRID, lw=1.2, zorder=0)
-            ax2.annotate(lab, (d, ax2.get_ylim()[1]), xytext=(3, -12), textcoords="offset points",
-                         fontsize=8, color=MUTED, rotation=90, va="top")
+            ax2.annotate(lab, (d, ax2.get_ylim()[0]), xytext=(3, 4), textcoords="offset points",
+                         fontsize=8, color=MUTED, rotation=90, va="bottom")
     ax2.grid(color=GRID, lw=0.8)
     ax2.spines[["top", "right"]].set_visible(False)
-    ax2.set(ylabel="total connectedness (%)", title=f"Contagion over time ({a.window}-period rolling window)")
+    ax2.set(ylabel="total connectedness (%)", title="Contagion over time (rolling windows)" if a.compare_window
+            else f"Contagion over time ({a.window}-{unit} rolling window)")
     ax2.set_xlim(t[0], t[-1])
-    fig.suptitle(title, x=0.01, y=0.98, ha="left", fontsize=12)
+    fig.suptitle(a.title or title, x=0.01, y=0.98, ha="left", fontsize=12)
     fig.savefig(a.out, dpi=150, facecolor="white")
     print(f"chart -> {a.out}")
 

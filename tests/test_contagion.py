@@ -128,7 +128,8 @@ def test_cli_start_focus_and_logvol():
         P.to_csv(os.path.join(d, "p.csv"))
         for measure in ("returns", "logvol"):
             sys.argv = ["contagion", "--csv", os.path.join(d, "p.csv"), "--start", "2015-01-01", "--focus", "KZT",
-                        "--measure", measure, "--window", "52", "--out", os.path.join(d, "c.png")]
+                        "--measure", measure, "--window", "52", "--compare-window", "26",
+                        "--out", os.path.join(d, "c.png")]
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
                 main()
